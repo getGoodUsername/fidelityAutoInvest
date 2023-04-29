@@ -1,0 +1,17 @@
+https://digital.fidelity.com/ftgw/digital/trade-equity/index?ACCOUNT=[accountID *redacted just in case*]&ORDER_TYPE=E&CURRENT_PAGE=TradeStocks&DEST_TRADE=Y&SYMBOL=VTI
+
+what remains constant:
+    ORDER_TYPE=E
+    CURRENT_PAGE=TradeStocks
+    DEST_TRADE=Y
+
+what is dynamic:
+    ACCOUNT=[accountID]
+    SYMBOL=VTI
+
+What I think stuff means:
+"ORDER_TYPE=E":                             equities can also be =M meaning mutual funds
+"CURRENT_PAGE=TradeStocks":                 I think this a redundant version of the above query paramater
+"DEST_TRADE=Y":                             no idea... it automatically appears so I am keeping it
+ACCOUNT=[accountID]:                        the number associated with a specific account in fidelity, say a ROTH, or after tax account
+SYMBOL=VTI:                                 ticker of the equity I want to buy or sell.

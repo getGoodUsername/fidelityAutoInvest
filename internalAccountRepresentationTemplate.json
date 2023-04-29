@@ -1,0 +1,27 @@
+[
+    {
+        "AccountName": "ROTH IRA",
+        "accountID": "numbers and letters associated with the specific account (roth, after tax, 401k, etc)",
+        "tickers": ["VTI", "AVUV", "VXUS"],
+        "weightPathInfo":
+        {
+            "startDate": "mm/dd/yyyy",
+            "endDate": "mm/dd/yyyy",
+            "startWeight": [0.3, 0.5, 0.2],
+            "endWeight": [0.6, 0.1, 0.3]
+        }
+    },
+    {
+        "AccountName": "After Tax Account",
+        "accountID": "numbers and letters associated with the specific account (roth, after tax, 401k, etc)",
+        "tickers": ["VTI", "AVUV", "VXUS", "BND"],
+        "weightPathInfo":
+        {
+            "startDate": "mm/dd/yyyy",
+            "endDate": "mm/dd/yyyy",
+            "startWeight": [0.3, 0.5, 0.2],
+            "endWeight": [0.6, 0.1, 0.3]
+        }
+    }
+]
+
