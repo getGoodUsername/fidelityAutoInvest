@@ -10,8 +10,9 @@ std::vector<double> changeInTotalPortfolioValueNeededForCurrentAssetValuesToBeco
 bool canDoFullSingleOpRebalance(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue, double targetBuySell);
 std::size_t getMostOverWeightIndex(const std::vector<double>& targetWeights, const std::vector<double>& currAssetValues, double currPortfolioValue);
 std::size_t getMostUnderWeightIndex(const std::vector<double>& targetWeights, const std::vector<double>& currAssetValues, double currPortfolioValue);
-std::vector<double> singleOperationTransaction(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double targetBuySell, std::size_t maxIter = 100000);
-
+std::vector<double> singleOperationTransaction(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double targetBuySell, std::size_t maxIter);
+std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue, double targetBuySell, std::size_t maxIter);
+std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t> zeroWeightOriginalIndexNumbers, double targetSell);
 
 template<typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
@@ -29,13 +30,13 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 int main(void)
 {
     std::vector<double> targetWeights = {
-        36.737 / 100,
-        23.369 / 100,
-        8.369 / 100,
-        4.021 / 100,
-        6.631 / 100,
-        3.631 / 100,
-        17.242 / 100
+        40.000 / 100,
+        25.000 / 100,
+        12.000 / 100,
+        10.000 / 100,
+        0.000 / 100,
+        0.000 / 100,
+        13.000 / 100
     };
 
     std::vector<double> assetValues = {
@@ -174,6 +175,8 @@ std::vector<double> singleOperationTransaction(const std::vector<double>& target
         return count;
     })();
 
+    if (numberOfZeroWeightAssets > 0)
+        return zeroWeightHandler(targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter);
 
     const bool isSell = targetBuySell < 0;
     std::vector<double> endAssetValues = assetValues;
@@ -234,4 +237,193 @@ std::vector<double> singleOperationTransaction(const std::vector<double>& target
 
         return diff;
     })();
+}
+
+
+
+
+
+std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t> zeroWeightOriginalIndexNumbers, double targetSell)
+{
+    struct ValueIndexPair
+    {
+        double value;
+        double index;
+
+    };
+
+    std::vector<ValueIndexPair> zeroWeightAssetsSortedValuesDescending = ([&]() -> std::vector<ValueIndexPair>
+    {
+        // std::sort(s.begin(), s.end(), std::greater<int>());
+        std::vector<ValueIndexPair> result(zeroWeightAssetValues.size());
+        for (std::size_t i = 0; i < zeroWeightAssetValues.size(); i += 1)
+        {
+            result[i].value = zeroWeightAssetValues[i];
+            result[i].index = zeroWeightOriginalIndexNumbers[i];
+        }
+
+        std::sort(result.begin(), result.end(), [](const ValueIndexPair& a, const ValueIndexPair& b) -> bool {return a.value > b.value;});
+        return result;
+    })();
+
+    std::cout << '[';
+    for (const auto& valueIndex : zeroWeightAssetsSortedValuesDescending)
+    {
+        std::cout << "{value: " << valueIndex.value << ", index"
+    }
+}
+
+
+
+
+
+std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue, double targetBuySell, std::size_t maxIter)
+{
+    const auto alignResultsToOriginalIndex = [](
+        const std::vector<double>& subsetValues,
+        const std::vector<std::size_t>& originalSubsetElementIndex,
+        std::size_t superSetSize
+    ) -> std::vector<double>
+    {
+        std::vector<double> aligned(superSetSize);
+        for (std::size_t i = 0, k = 0; i < superSetSize; i += 1)
+        {
+            aligned[i] = ([&]() -> double
+            {
+                if (k < originalSubsetElementIndex.size())
+                {
+                    const std::size_t originalIndex = originalSubsetElementIndex[k];
+                    if (originalIndex == i)
+                    {
+                        const double result = subsetValues[k];
+                        k += 1;
+                        return result;
+                    }
+                }
+
+                return 0;
+            })();
+        }
+
+        return aligned;
+    };
+
+    // c++ really dropping the ball by not having a filter func...
+    // or some sort of array destructuring that allows me to keep const...
+    // or some sort of built in map function like JS...
+    // ANYTHING!
+    const std::vector<std::size_t> indexNumbersNonZeroWeight = ([&]() -> std::vector<std::size_t>
+    {
+        std::vector<std::size_t> result;
+        for (std::size_t i = 0; i < targetWeights.size(); i += 1)
+        {
+            if (targetWeights[i] != 0) result.push_back(i);
+        }
+
+        return result;
+    })();
+    const std::vector<double> targetNonZeroWeights = ([&]() -> std::vector<double>
+    {
+        std::vector<double> result(indexNumbersNonZeroWeight.size());
+        for (std::size_t i = 0; i < indexNumbersNonZeroWeight.size(); i += 1)
+        {
+            result[i] = targetWeights[indexNumbersNonZeroWeight[i]];
+        }
+
+        return result;
+    })();
+    const std::vector<double> assetValuesWithTargetNonZeroWeights = ([&]() -> std::vector<double>
+    {
+        std::vector<double> result(indexNumbersNonZeroWeight.size());
+        for (std::size_t i = 0; i < indexNumbersNonZeroWeight.size(); i += 1)
+        {
+            result[i] = assetValues[indexNumbersNonZeroWeight[i]];
+        }
+
+        return result;
+    })();;
+
+
+    const bool isBuy = targetBuySell >= 0;
+    if (isBuy)
+    {
+        return alignResultsToOriginalIndex(
+            singleOperationTransaction(targetNonZeroWeights, assetValuesWithTargetNonZeroWeights, targetBuySell, maxIter),
+            indexNumbersNonZeroWeight,
+            targetWeights.size()
+        );
+    }
+
+    const double targetSell = targetBuySell; // negative value
+    if (-targetSell >= totalPortfolioValue)
+    {
+        return ([&]() -> std::vector<double>
+        {
+            std::vector<double> fullSell(assetValues.size());
+            for (std::size_t i = 0; i < assetValues.size(); i += 1)
+            {
+                fullSell[i] = -assetValues[i];
+            }
+
+            return fullSell;
+        })();
+    }
+
+    const std::vector<std::size_t> indexNumbersZeroWeight = ([&]() -> std::vector<std::size_t>
+    {
+        std::vector<std::size_t> result;
+        for (std::size_t i = 0; i < targetWeights.size(); i += 1)
+        {
+            if (targetWeights[i] == 0) result.push_back(i);
+        }
+
+        return result;
+    })();
+    const double sumOfZeroWeightAssetValues = ([&]() -> double
+    {
+        double sum = 0;
+        for (const std::size_t zeroIndex : indexNumbersZeroWeight)
+        {
+            sum += assetValues[zeroIndex];
+        }
+
+        return sum;
+    })();
+    const bool canSellMoreThanJustAllTheZeroWeightAssets = -targetSell > sumOfZeroWeightAssetValues;
+    const bool canOnlySellSomeZeroWeightAssets = sumOfZeroWeightAssetValues > -targetSell;
+
+    if (canSellMoreThanJustAllTheZeroWeightAssets)
+    {
+        const std::size_t newMaxIter = ([&]() -> std::size_t
+        {
+            const std::size_t originalMaxIter = maxIter;
+            const std::size_t originalChangePacket = totalPortfolioValue / originalMaxIter;
+            const std::size_t equivalentItersDoneBySellingAllZeroWeightAssets = sumOfZeroWeightAssetValues / originalChangePacket;
+            return originalMaxIter - equivalentItersDoneBySellingAllZeroWeightAssets;
+        })();
+        const std::vector<double> changesToNonZeroAssetValues = singleOperationTransaction(
+            targetNonZeroWeights,
+            assetValuesWithTargetNonZeroWeights,
+            targetSell + sumOfZeroWeightAssetValues,
+            newMaxIter
+        );
+        return ([&]() -> std::vector<double>
+        {
+            std::vector<double> result = alignResultsToOriginalIndex(changesToNonZeroAssetValues, indexNumbersNonZeroWeight, targetWeights.size());
+            for (const std::size_t zeroIndex : indexNumbersZeroWeight)
+            {
+                result[zeroIndex] = -assetValues[zeroIndex];
+            }
+
+            return result;
+        })();
+    }
+
+    if (canOnlySellSomeZeroWeightAssets)
+    {
+        return std::vector<double>(4, 0);
+    }
+
+    return std::vector<double>(5, 0);
+
 }
