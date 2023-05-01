@@ -53,10 +53,9 @@ int main(void)
         11317.59
     };
 
-    const double targetBuySell = 20000;
-    std::vector<double> og = {12.54, 500.55, 2780.98, 460};
+    const double targetBuySell = -20000;
 
-    std::cout << singleOperationTransaction(targetWeights, assetValues, targetBuySell, targetBuySell) << std::endl;
+    std::cout << singleOperationTransaction(targetWeights, assetValues, targetBuySell, abs(targetBuySell)) << std::endl;
 
     return 0;
 }
@@ -120,11 +119,11 @@ bool canDoFullSingleOpRebalance(const std::vector<double>& targetWeights, const 
     if (isSell)
     {
         const double minPortfolioSellForFullOnlySellRebalance = *std::min_element(change.begin(), change.end());
-        return targetBuySell <= minPortfolioSellForFullOnlySellRebalance;
+        return targetBuySell < minPortfolioSellForFullOnlySellRebalance || currencyEquality(targetBuySell, minPortfolioSellForFullOnlySellRebalance);
     }
 
     const double minPortfolioBuyForFullOnlyBuyRebalance = *std::max_element(change.begin(), change.end());
-    return targetBuySell >= minPortfolioBuyForFullOnlyBuyRebalance;
+    return targetBuySell > minPortfolioBuyForFullOnlyBuyRebalance || currencyEquality(targetBuySell, minPortfolioBuyForFullOnlyBuyRebalance);
 }
 
 
@@ -196,18 +195,18 @@ std::vector<double> singleOperationTransaction(const std::vector<double>& target
     if (canDoFullSingleOpRebalance(targetWeights, assetValues, totalPortfolioValue, targetBuySell))
         return rebalance(targetWeights, assetValues, totalPortfolioValue);
 
-    const std::size_t numberOfZeroWeightAssets = ([&]()
+    const bool thereAreZeroTargetWeights = ([&]()
     {
-        std::size_t count = 0;
-        for (const double weight : targetWeights)
+        bool result = false;
+        for (std::size_t i = 0; i < targetWeights.size() && !result; i += 1)
         {
-            count += isWeightZero(weight);
+            result |= isWeightZero(targetWeights[i]);
         }
 
-        return count;
+        return false;
     })();
 
-    if (numberOfZeroWeightAssets > 0)
+    if (thereAreZeroTargetWeights)
         return zeroWeightHandler(targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter);
 
     const bool isSell = targetBuySell < 0;
@@ -371,6 +370,21 @@ std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAss
 
 std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue, double targetBuySell, std::size_t maxIter)
 {
+    const double targetSell = targetBuySell;
+    if (-targetSell > totalPortfolioValue || currencyEquality(-targetSell, totalPortfolioValue)) // will only work if actually a sell and therefore a negative value
+    {
+        return ([&]() -> std::vector<double>
+        {
+            std::vector<double> fullSell(assetValues.size());
+            for (std::size_t i = 0; i < assetValues.size(); i += 1)
+            {
+                fullSell[i] = -assetValues[i];
+            }
+
+            return fullSell;
+        })();
+    }
+
     const auto alignResultsToOriginalIndex = [](
         const std::vector<double>& subsetValues,
         const std::vector<std::size_t>& originalSubsetElementIndex,
@@ -409,7 +423,7 @@ std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, 
         std::vector<std::size_t> result;
         for (std::size_t i = 0; i < targetWeights.size(); i += 1)
         {
-            if (targetWeights[i] != 0) result.push_back(i);
+            if (!isWeightZero(targetWeights[i])) result.push_back(i);
         }
 
         return result;
@@ -435,8 +449,10 @@ std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, 
         return result;
     })();;
 
+    // though target buy sell should be greater than 0 not equal...
+    // we do this to be consistent with the negation of isSell
+    const bool isBuy = targetBuySell > 0.0 || currencyEquality(targetBuySell, 0.0);
 
-    const bool isBuy = targetBuySell >= 0;
     if (isBuy)
     {
         return alignResultsToOriginalIndex(
@@ -445,28 +461,19 @@ std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, 
             targetWeights.size()
         );
     }
+    // else is sell
 
-    const double targetSell = targetBuySell; // negative value
-    if (-targetSell >= totalPortfolioValue)
-    {
-        return ([&]() -> std::vector<double>
-        {
-            std::vector<double> fullSell(assetValues.size());
-            for (std::size_t i = 0; i < assetValues.size(); i += 1)
-            {
-                fullSell[i] = -assetValues[i];
-            }
-
-            return fullSell;
-        })();
-    }
-
+    const std::size_t numberOfZeroWeights = targetWeights.size() - indexNumbersNonZeroWeight.size();
     const std::vector<std::size_t> indexNumbersZeroWeight = ([&]() -> std::vector<std::size_t>
     {
-        std::vector<std::size_t> result;
-        for (std::size_t i = 0; i < targetWeights.size(); i += 1)
+        std::vector<std::size_t> result(numberOfZeroWeights);
+        for (std::size_t i = 0, k = 0; i < targetWeights.size(); i += 1)
         {
-            if (isWeightZero(targetWeights[i])) result.push_back(i);
+            if (isWeightZero(targetWeights[i]))
+            {
+                result[k] = i;
+                k += 1;
+            }
         }
 
         return result;
@@ -513,9 +520,42 @@ std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, 
 
     if (canOnlySellSomeZeroWeightAssets)
     {
-        return std::vector<double>(4, 0);
+        const std::vector<double> zeroWeightAssetValues = ([&]() -> std::vector<double>
+        {
+            std::vector<double> result(numberOfZeroWeights);
+            for (std::size_t i = 0; i < indexNumbersZeroWeight.size(); i += 1)
+            {
+                result[i] = assetValues[indexNumbersZeroWeight[i]];
+            }
+
+            return result;
+        })();
+        const std::vector<double> afterSalesZeroWeightAssetValues = sellZeroWeightAsset(zeroWeightAssetValues, indexNumbersZeroWeight, targetSell);
+        return ([&]() -> std::vector<double>
+        {
+            std::vector<double> result(numberOfZeroWeights);
+            for (std::size_t i = 0; i < numberOfZeroWeights; i += 1)
+            {
+                result[i] = afterSalesZeroWeightAssetValues[i] - zeroWeightAssetValues[i];
+            }
+
+            return alignResultsToOriginalIndex(
+                result,
+                indexNumbersZeroWeight,
+                targetWeights.size()
+            );
+        })();
     }
 
-    return std::vector<double>(5, 0);
+    // can sell exactly only fully the zero weight assets
+    return ([&]() -> std::vector<double>
+    {
+        std::vector<double> result(0);
+        for (const std::size_t zeroIndex : indexNumbersZeroWeight)
+        {
+            result[zeroIndex] = -assetValues[zeroIndex];
+        }
 
+        return result;
+    })();
 }
