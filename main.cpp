@@ -1,6 +1,7 @@
 #include <vector>
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 #include <iostream>
 
@@ -12,7 +13,10 @@ std::size_t getMostOverWeightIndex(const std::vector<double>& targetWeights, con
 std::size_t getMostUnderWeightIndex(const std::vector<double>& targetWeights, const std::vector<double>& currAssetValues, double currPortfolioValue);
 std::vector<double> singleOperationTransaction(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double targetBuySell, std::size_t maxIter);
 std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue, double targetBuySell, std::size_t maxIter);
-std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t> zeroWeightOriginalIndexNumbers, double targetSell);
+std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t>& zeroWeightOriginalIndexNumbers, double targetSell);
+bool floatingPointEquality(double a, double b, double epsilon);
+bool currencyEquality(double a, double b);
+bool isWeightZero(double weight);
 
 template<typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
@@ -30,8 +34,8 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 int main(void)
 {
     std::vector<double> targetWeights = {
-        40.000 / 100,
-        25.000 / 100,
+        65.000 / 100,
+        0.000 / 100,
         12.000 / 100,
         10.000 / 100,
         0.000 / 100,
@@ -45,16 +49,44 @@ int main(void)
         6708.47,
         3659.90,
         5608.27,
-        3543.19,
+        14447.1967749764,
         11317.59
     };
 
     const double targetBuySell = 20000;
+    std::vector<double> og = {12.54, 500.55, 2780.98, 460};
 
     std::cout << singleOperationTransaction(targetWeights, assetValues, targetBuySell, targetBuySell) << std::endl;
+
     return 0;
 }
 
+
+
+
+
+bool floatingPointEquality(double a, double b, double epsilon)
+{
+    return std::abs(a - b) <= epsilon;
+}
+
+
+
+bool currencyEquality(double a, double b)
+{
+    // min value in a dollar is 0.01 (aka a penny). epsilon of a tenth of a penny should be good enough.
+    constexpr double epsilon = 0.001;
+    return floatingPointEquality(a, b, epsilon);
+}
+
+
+
+bool isWeightZero(double weight)
+{
+    // I only really want weights with three decimal digits max. (ex. 5.535%). so if weight is less than or eq to 0.0001% I want to treat as zero
+    constexpr double epsilon = 1e-6;
+    return floatingPointEquality(weight, 0.0, epsilon);
+}
 
 
 
@@ -68,7 +100,7 @@ std::vector<double> changeInTotalPortfolioValueNeededForCurrentAssetValuesToBeco
         const double value = assetValues[i];
         result[i] = ([&]() -> double
         {
-            if (weight == 0) return (value > 0) ? std::numeric_limits<double>::max() : 0;
+            if (isWeightZero(weight)) return (value > 0) ? std::numeric_limits<double>::max() : 0;
             return (value / weight) - totalPortfolioValue;
         })();
     }
@@ -169,7 +201,7 @@ std::vector<double> singleOperationTransaction(const std::vector<double>& target
         std::size_t count = 0;
         for (const double weight : targetWeights)
         {
-            count += weight == 0;
+            count += isWeightZero(weight);
         }
 
         return count;
@@ -242,19 +274,29 @@ std::vector<double> singleOperationTransaction(const std::vector<double>& target
 
 
 
-
-std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t> zeroWeightOriginalIndexNumbers, double targetSell)
+/**
+ * @brief SUM(zeroWeightAssetValues) > -targetSell must be true.
+ * 
+ * @param zeroWeightAssetValues 
+ * @param zeroWeightOriginalIndexNumbers 
+ * @param targetSell 
+ * @return std::vector<double> which is the new values (NOT THE DIFF) of the assets after selling.
+ */
+std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAssetValues, const std::vector<std::size_t>& zeroWeightOriginalIndexNumbers, double targetSell)
 {
+    if (zeroWeightAssetValues.size() == 1) return {zeroWeightAssetValues[0] + targetSell};
+
+    // I need to be able to sort and still know what the element's
+    // original index was in order to put them back into their
+    // original order.
     struct ValueIndexPair
     {
         double value;
         double index;
-
     };
 
     std::vector<ValueIndexPair> zeroWeightAssetsSortedValuesDescending = ([&]() -> std::vector<ValueIndexPair>
     {
-        // std::sort(s.begin(), s.end(), std::greater<int>());
         std::vector<ValueIndexPair> result(zeroWeightAssetValues.size());
         for (std::size_t i = 0; i < zeroWeightAssetValues.size(); i += 1)
         {
@@ -265,12 +307,62 @@ std::vector<double> sellZeroWeightAsset(const std::vector<double>& zeroWeightAss
         std::sort(result.begin(), result.end(), [](const ValueIndexPair& a, const ValueIndexPair& b) -> bool {return a.value > b.value;});
         return result;
     })();
-
-    std::cout << '[';
-    for (const auto& valueIndex : zeroWeightAssetsSortedValuesDescending)
+    std::size_t groupWithSameLargestValueSize = ([&]() -> std::size_t
     {
-        std::cout << "{value: " << valueIndex.value << ", index"
+        std::size_t groupSize = 1;
+        const double largestValue = zeroWeightAssetsSortedValuesDescending[0].value;
+        for (;
+            groupSize < zeroWeightAssetsSortedValuesDescending.size() &&
+                currencyEquality(largestValue, zeroWeightAssetsSortedValuesDescending[groupSize].value);
+            groupSize += 1
+        ){}
+
+        return groupSize;
+    })();
+    double remainingSell = targetSell; // remember, this value is negative!!!!
+    double currLargestValue = zeroWeightAssetsSortedValuesDescending[0].value;
+
+    while (groupWithSameLargestValueSize < zeroWeightAssetsSortedValuesDescending.size() && !currencyEquality(remainingSell, 0))
+    {
+        // todo, have to check the size of the next group...    
+        const double nextGroupUniformValue = zeroWeightAssetsSortedValuesDescending[groupWithSameLargestValueSize].value;
+        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupWithSameLargestValueSize;
+        const double actualChange = (-remainingSell > -targetChange || currencyEquality(remainingSell, targetChange)) ? targetChange : remainingSell;
+
+        remainingSell -= actualChange;
+        currLargestValue += actualChange / groupWithSameLargestValueSize;
+        // maybe the size of the next group is greater than 1, this ensures we also get those values to.
+        for (;
+            groupWithSameLargestValueSize < zeroWeightAssetsSortedValuesDescending.size() &&
+                currencyEquality(zeroWeightAssetsSortedValuesDescending[groupWithSameLargestValueSize].value, currLargestValue);
+            groupWithSameLargestValueSize += 1
+        ){}
     }
+
+    currLargestValue += remainingSell / groupWithSameLargestValueSize;
+
+    for (std::size_t i = 0; i < groupWithSameLargestValueSize; i += 1)
+    {
+        zeroWeightAssetsSortedValuesDescending[i].value = currLargestValue;
+    }
+
+    // revert assets to their original order. index in ascending order
+    std::sort(
+        zeroWeightAssetsSortedValuesDescending.begin(),
+        zeroWeightAssetsSortedValuesDescending.end(),
+        [](const ValueIndexPair& a, const ValueIndexPair& b) -> bool {return a.index < b.index;}
+    );
+
+    return ([&]() -> std::vector<double>
+    {
+        std::vector<double> result(zeroWeightAssetValues.size());
+        for (std::size_t i = 0 ; i < zeroWeightAssetValues.size(); i += 1)
+        {
+            result[i] = zeroWeightAssetsSortedValuesDescending[i].value;
+        }
+
+        return result;
+    })();
 }
 
 
@@ -374,7 +466,7 @@ std::vector<double> zeroWeightHandler(const std::vector<double>& targetWeights, 
         std::vector<std::size_t> result;
         for (std::size_t i = 0; i < targetWeights.size(); i += 1)
         {
-            if (targetWeights[i] == 0) result.push_back(i);
+            if (isWeightZero(targetWeights[i])) result.push_back(i);
         }
 
         return result;
