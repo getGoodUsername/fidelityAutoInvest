@@ -135,6 +135,7 @@ bool canDoFullSingleOpRebalance(const std::vector<double>& targetWeights, const 
 
 
 
+
 std::vector<double> rebalance(const std::vector<double>& targetWeights, const std::vector<double>& assetValues, double totalPortfolioValue)
 {
     std::vector<double> result(targetWeights.size());
