@@ -7,11 +7,12 @@
 #include <iostream>
 
 
-// only made solution into a class to minimize the shit I have to pass around, just to minimize the number of columns I use
+// only made solution into a class to minimize the shit I have to pass around, just to minimize
+// the number of columns I use and to do some optimization in single operation transaction
 /**
- * @brief SUM(targetWeights) must eq 100%
+ * SUM(targetWeights) must eq 100%
  * targetWeights.size() == assetValues.size()
- * targetWeights.size() >= 2
+ * targetWeights.size() >= 2 (that'd be a waste if it was less than 2...)
  * maxIter > 0
  * targetBuySell should != 0.0 (that'd be a waste if it was..,)
  * totalPortfolioValue = SUM(assetValues)
@@ -53,7 +54,7 @@ private:
 
 bool isFloatingPointEqual(const double a, const double b, const double epsilon) noexcept;
 
-
+// for testing only, will be deleted in the future
 template<typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
     os << "[ ";
@@ -65,7 +66,6 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
     os << vec[vec.size() - 1] << "]";
     return os;
 }
-
 
 int main(void)
 {
@@ -104,10 +104,13 @@ bool isFloatingPointEqual(const double a, const double b, const double epsilon) 
     return std::abs(a - b) <= epsilon;
 }
 
+
+
+
 double Solution::rebalanceAssetValue(const double targetWeight, const double assetValue, const double portfolioValue) noexcept
 {
     const double idealValue = portfolioValue * targetWeight;
-    return assetValue - idealValue;
+    return idealValue - assetValue;
 }
 
 
@@ -135,7 +138,8 @@ bool Solution::isWeightZero(double weight) noexcept
 
 std::vector<double> Solution::getResult(void) const noexcept
 {
-    if (-this->targetBuySell > this->totalPortfolioValue || Solution::isCurrencyEqual(-this->targetBuySell, this->totalPortfolioValue))
+    const bool isSellWholePortfolio = -this->targetBuySell > this->totalPortfolioValue || Solution::isCurrencyEqual(-this->targetBuySell, this->totalPortfolioValue);
+    if (isSellWholePortfolio)
     {
         std::vector<double> fullSell(this->assetCount);
         std::transform(assetValues.begin(), assetValues.end(), fullSell.begin(), [](double value){return -value;});
