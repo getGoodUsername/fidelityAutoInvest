@@ -1,0 +1,4 @@
+track the asset values and their target weights and send a notification
+if at the end of a closing day your target weights have shifted so much
+that to be able to do a full buy rebalance would go above some threshold
+defined by the user.
