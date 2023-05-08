@@ -14,13 +14,20 @@
  * SUM(targetWeights) must eq 100%
  * targetWeights.size() == assetValues.size()
  * totalPortfolioValue = SUM(assetValues)
- * changePacket > 0 if targetBuySell > 0, otherwise changePacket < 0 if targetBuySell < 0
+ * maxIter > 0
  */
 class Solution
 {
 public:
-    Solution(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double totalPortfolioValue, const double targetBuySell, const double changePacket) noexcept
-        : targetWeights(targetWeights), assetValues(assetValues), totalPortfolioValue(totalPortfolioValue), targetBuySell(targetBuySell), changePacket(changePacket), isSell(targetBuySell < 0), assetCount(assetValues.size())
+    Solution(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double targetBuySell, const std::size_t maxIter) noexcept
+        : Solution(
+            targetWeights,
+            assetValues,
+            std::accumulate(assetValues.begin(), assetValues.end(), 0),
+            std::count_if(targetWeights.begin(), targetWeights.end(), Solution::isWeightZero),
+            targetBuySell,
+            maxIter
+        )
     {}
 
     JSArray<double> getResult(void) const noexcept;
@@ -33,19 +40,31 @@ public:
     Solution& operator=(Solution&&) = delete;
 
 private:
+    Solution(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double totalPortfolioValue, const std::size_t numberOfZeroWeights, const double targetBuySell, const std::size_t maxIter) noexcept
+        : targetWeights(targetWeights),
+        assetValues(assetValues),
+        totalPortfolioValue(totalPortfolioValue),
+        numberOfZeroWeights(numberOfZeroWeights),
+        targetBuySell(targetBuySell),
+        maxIter(maxIter),
+        assetCount(assetValues.size()),
+        isSell(targetBuySell < 0)
+    {}
+
     const JSArray<double>& targetWeights;
     const JSArray<double>& assetValues;
-    const double targetBuySell;
-    const double changePacket;
     const double totalPortfolioValue;
+    const std::size_t numberOfZeroWeights;
+    const double targetBuySell;
+    const std::size_t maxIter;
     const std::size_t assetCount;
     const bool isSell;
 
     bool canDoFullSingleOpRebalance(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell */) const noexcept;
     std::size_t getMostOverWeightIndex(/* targetWeights, */ const JSArray<double>& currAssetValues, const double currPortfolioValue) const noexcept;
     std::size_t getMostUnderWeightIndex(/* targetWeights, */ const JSArray<double>& currAssetValues, const double currPortfolioValue) const noexcept;
-    JSArray<double> singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, changePacket */) const noexcept;
-    JSArray<double> zeroWeightHandler(const std::size_t numberOfZeroWeights /* ,targetWeights, assetValues, totalPortfolioValue, targetBuySell, changePacket */) const noexcept;
+    JSArray<double> singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter */) const noexcept;
+    JSArray<double> zeroWeightHandler(/* ,targetWeights, assetValues, totalPortfolioValue, numberOfZeroWeights, targetBuySell, maxIter */) const noexcept;
     JSArray<double> sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues, const JSArray<std::size_t>& zeroWeightOriginalIndexNumbers, const double targetSell) const noexcept;
 
     static bool isWeightZero(const double weight) noexcept;
@@ -81,23 +100,19 @@ int main(void)
         8.000 / 100
     };
     const JSArray<double> assetValues = {
-        203672.72,
-        105918.04,
-        60708.47,
-        30659.90,
-        50608.27,
-        104447.1967749764,
-        101317.59
+        23672.72,
+        15918.04,
+        6708.47,
+        3659.90,
+        5608.27,
+        14447.1967749764,
+        11317.59
     };
-    const double totalPortfolioValue = std::accumulate(assetValues.begin(), assetValues.end(), 0);
-    const double targetBuySell = -200000;
-    // const double changePacket = -10;
+    const double targetBuySell = 71961.4 + 3700;
 
-    std::cout << totalPortfolioValue << '\n';
-    std::cout << Solution(targetWeights, assetValues, totalPortfolioValue, targetBuySell, -2).getResult() << std::endl;
-    std::cout << Solution(targetWeights, assetValues, totalPortfolioValue, targetBuySell, -20).getResult() << std::endl;
-    std::cout << Solution(targetWeights, assetValues, totalPortfolioValue, targetBuySell, -400).getResult() << std::endl;
-    std::cout << Solution(targetWeights, assetValues, totalPortfolioValue, targetBuySell, -2000).getResult() << std::endl;
+    auto calculator = Solution(targetWeights, assetValues, targetBuySell, 100);
+    std::cout << calculator.getResult() << '\n';
+
 
     return 0;
 }
@@ -173,9 +188,8 @@ JSArray<double> Solution::getResult(void) const noexcept
     if (isSellWholePortfolio)
         return this->assetValues.map([](double val){return -val;});
 
-    const std::size_t numberOfZeroWeights = std::count_if(this->targetWeights.begin(), this->targetWeights.end(), Solution::isWeightZero);
-    if (numberOfZeroWeights > 0)
-        return this->zeroWeightHandler(numberOfZeroWeights);
+    if (this->numberOfZeroWeights > 0)
+        return this->zeroWeightHandler();
 
     if (this->canDoFullSingleOpRebalance())
         return this->targetWeights.map(
@@ -277,8 +291,9 @@ std::size_t Solution::getMostUnderWeightIndex(/* targetWeights, */ const JSArray
 
 
 
-JSArray<double> Solution::singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, changePacket */) const noexcept
+JSArray<double> Solution::singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter */) const noexcept
 {
+    const double changePacket = this->targetBuySell / this->maxIter;
     const auto assetSelector = (this->isSell) ? &Solution::getMostOverWeightIndex : &Solution::getMostUnderWeightIndex;
     const std::size_t initTargetAssetIndex = (this->*assetSelector)(assetValues, totalPortfolioValue);
     const double initChange = ([&]() -> double
@@ -338,8 +353,129 @@ JSArray<double> Solution::singleOperationTransaction(void /* targetWeights, asse
 
 
 
-JSArray<double> Solution::zeroWeightHandler(const std::size_t numberOfZeroWeights /*, targetWeights, assetValues, totalPortfolioValue, targetBuySell, changePacket */) const noexcept
+JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, totalPortfolioValue, numberOfZeroWeights, targetBuySell, maxIter */) const noexcept
 {
+    const auto alignResultsToOriginalIndex = [](
+        const JSArray<double>& subsetValues,
+        const JSArray<std::size_t>& originalSubsetElementIndex,
+        std::size_t superSetSize
+    ) -> JSArray<double>
+    {
+        JSArray<double> aligned(superSetSize);
+        for (std::size_t i = 0, k = 0; i < superSetSize; i += 1)
+        {
+            aligned[i] = ([&]() -> double
+            {
+                if (k < originalSubsetElementIndex.size())
+                {
+                    const std::size_t originalIndex = originalSubsetElementIndex[k];
+                    if (originalIndex == i)
+                    {
+                        const double result = subsetValues[k];
+                        k += 1;
+                        return result;
+                    }
+                }
+
+                return 0;
+            })();
+        }
+
+        return aligned;
+    };
+
+    const JSArray<std::size_t> indexNumbersNonZeroWeight = ([&]()
+    {
+        JSArray<std::size_t> result(this->assetCount - this->numberOfZeroWeights);
+        for (std::size_t i = 0, k = 0; i < this->assetCount; i += 1)
+        {
+            const double weight = this->targetWeights[i];
+            if (!Solution::isWeightZero(weight))
+            {
+                result[k] = i;
+                k += 1;
+            }
+        }
+
+        return result;
+    })();
+    const JSArray<double> targetNonZeroWeights = indexNumbersNonZeroWeight
+        .map([&](std::size_t valIndex){return this->targetWeights[valIndex];});
+    const JSArray<double> assetValuesWithTargetNonZeroWeights = indexNumbersNonZeroWeight
+        .map([&](std::size_t valIndex){return this->assetValues[valIndex];});
+    const double sumOfNonZeroWeightAssets = assetValuesWithTargetNonZeroWeights
+        .reduce([](double sum, double val){return sum + val;}, 0.0);
+
+    if (!this->isSell)
+    {
+        return alignResultsToOriginalIndex(
+            Solution(
+                targetNonZeroWeights,
+                assetValuesWithTargetNonZeroWeights,
+                sumOfNonZeroWeightAssets,
+                0,
+                this->targetBuySell,
+                this->maxIter
+            ).getResult(),
+            indexNumbersNonZeroWeight,
+            this->assetCount
+        );
+    }
+
+    const double targetSell = targetBuySell;
+    const std::size_t numberOfZeroWeights = this->assetCount - indexNumbersNonZeroWeight.size();
+    const JSArray<std::size_t> indexNumbersZeroWeight = ([&]()
+    {
+        JSArray<std::size_t> result(this->numberOfZeroWeights);
+        for (std::size_t i = 0, k = 0; i < this->assetCount; i += 1)
+        {
+            const double weight = this->targetWeights[i];
+            if (Solution::isWeightZero(weight))
+            {
+                result[k] = i;
+                k += 1;
+            }
+        }
+
+        return result;
+    })();
+    const double sumOfZeroWeightAssetValues = this->totalPortfolioValue - sumOfNonZeroWeightAssets;
+    const bool canSellMoreThanJustAllTheZeroWeightAssets = -targetSell > sumOfZeroWeightAssetValues;
+    const bool canOnlySellSomeZeroWeightAssets = sumOfZeroWeightAssetValues > -targetSell;
+
+    if (canSellMoreThanJustAllTheZeroWeightAssets)
+    {
+        const std::size_t newMaxIter = ([&]() -> std::size_t
+        {
+            const std::size_t originalMaxIter = this->maxIter;
+            const std::size_t originalChangePacket = totalPortfolioValue / originalMaxIter;
+            const std::size_t equivalentItersDoneBySellingAllZeroWeightAssets = sumOfZeroWeightAssetValues / originalChangePacket;
+            return originalMaxIter - equivalentItersDoneBySellingAllZeroWeightAssets;
+        })();
+        const JSArray<double> changesToNonZeroAssetValues = Solution(
+                targetNonZeroWeights,
+                assetValuesWithTargetNonZeroWeights,
+                sumOfNonZeroWeightAssets,
+                0,
+                this->targetBuySell + sumOfZeroWeightAssetValues,
+                newMaxIter
+            ).getResult();
+
+        return ([&]() -> JSArray<double>
+        {
+            JSArray<double> result = alignResultsToOriginalIndex(
+                changesToNonZeroAssetValues,
+                indexNumbersNonZeroWeight,
+                targetWeights.size()
+            );
+            for (const std::size_t zeroIndex : indexNumbersZeroWeight)
+            {
+                result[zeroIndex] = -assetValues[zeroIndex];
+            }
+
+            return result;
+        })();
+    }
 }
 
 
@@ -348,7 +484,37 @@ JSArray<double> Solution::zeroWeightHandler(const std::size_t numberOfZeroWeight
 
 JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues, const JSArray<std::size_t>& zeroWeightOriginalIndexNumbers, const double targetSell) const noexcept
 {
+    // I need to be able to sort and still know what the element's
+    // original index was in order to put them back into their
+    // original order.
+    struct ValueIndexPair
+    {
+        ValueIndexPair(double value, std::size_t index)
+            : value(value), index(index)
+        {}
 
+        double value;
+        int index;
+    };
+    const double targetSell = this->targetBuySell;
+
+    if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
+
+    JSArray<ValueIndexPair> zeroWeightAssetsSortedValuesDescending = zeroWeightAssetValues
+        .map([](double value, std::size_t index){return ValueIndexPair(value, index);})
+        .sort([](const auto& a, const auto& b){return a.value > b.value});
+    std::size_t groupWithSameLargestValueSize = ([&]() -> std::size_t
+    {
+        std::size_t groupSize = 1;
+        const double largestValue = zeroWeightAssetsSortedValuesDescending[0].value;
+        for (;
+            groupSize < zeroWeightAssetsSortedValuesDescending.size() &&
+                Solution::isCurrencyEqual(largestValue, zeroWeightAssetsSortedValuesDescending[groupSize].value);
+            groupSize += 1
+        ){}
+
+        return groupSize;
+    })();
 }
 
 
