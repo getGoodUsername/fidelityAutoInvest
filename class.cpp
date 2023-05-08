@@ -13,6 +13,9 @@ namespace Compute
     bool isCurrencyEqual(const double a, const double b) noexcept;
     double rebalanceAssetValue(const double targetWeight, const double assetValue, const double portfolioValue) noexcept;
     double getAssetValueChangeForEqRebalance(const double weight0, const double value0, const double weight1, const double value1, const double portfolioValue) noexcept;
+    double getChangeInPortfolioValueForAssetValueToBecomeIdealValue(const double targetWeight, const double assetValue, const double portfolioValue) noexcept;
+    double getMinTargetBuyForFullPortfolioOnlyBuyRebalance(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double portfolioValue) noexcept;
+    double getMinTargetSellForFullPortfolioOnlySellRebalance(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double portfolioValue) noexcept;
 }
 
 // only made solution into a class to minimize the shit I have to pass around, just to minimize
@@ -173,7 +176,7 @@ double getAssetValueChangeForEqRebalance(const double weight0, const double valu
 {
     /**
      * Calculation Notes:
-     * rebalance(pv, tw, av) = pv * tw - av;
+     * def rebalance(pv, tw, av) {return pv * tw - av;}
      * rebalance(pv + x, tw0, av0 + x) = rebalance(pv + x, tw1, av1)  // where x is the change in av0 so values are equal. (if av0 is most underweight x will always be > 0, if av0 is most overweight x will always be < 0)
      * (pv + x) * tw0 - (av0 + x) = (pv + x) * tw1 - av1
      * pv*tw0 + x*tw0 - av0 - x = pv*tw1 + x*tw1 - av1
@@ -181,8 +184,85 @@ double getAssetValueChangeForEqRebalance(const double weight0, const double valu
      * x*(tw0 - tw1 - 1) = pv*(tw1 - tw0) + av0 - av1
      * x = (pv*(tw1 - tw0) + av0 - av1) / (tw0 - tw1 - 1)
      * 
+     * As to why this is useful; this lets us skip a lot
+     * of buy/dumb work in singleOperationTransaction. Often
+     * times the most over/underweight asset's "rebalance
+     * value" is much larger in magnitude the second biggest,
+     * and a lot of computational cycles will be wasted trying to
+     * figure out which is the next most over/under weight index
+     * when it will be the same index for quite a while. We use
+     * this to skip right to the point where assets are
+     * swapping the position of most over/underweight asset
+     * often by the just the changing by "changePacket".
+     * As to why we don't use this method for every cycle,
+     * when we actually get to the point where assets
+     * are trading for spots for most over/under weight
+     * the difference in rebalance values is not big enough
+     * to warrant the extra complexity in code, but especially
+     * the doubling of compute cycles. Its only worth it in the
+     * beginning.
      */
     return (portfolioValue * (weight1 - weight0) + value0 - value1) / (weight0 - weight1 - 1);
+}
+
+
+
+
+double getChangeInPortfolioValueForAssetValueToBecomeIdealValue(const double targetWeight, const double assetValue, const double portfolioValue) noexcept
+{
+    /**
+     * Calculation Notes:
+     * av = (pv + x) * tw // where x is the change in portfolio value such that the new portfolio value (pv + x) * the target weight is av
+     * av / tw = pv + x
+     * x = (av / tw) - pv
+     * 
+     * As to why this is useful; the resulting value tells
+     * us the state as to when changing the portfolio value
+     * any more in the same direction (remember x can be positive
+     * or negative) will result in having to change the assets
+     * value too in order to keep it at its target value. If
+     * we find the biggest result "x" from the set of value weight
+     * pairs, this will tell us the point when enacting
+     * a rebalance on all assets will at worst result in no change
+     * for one asset. It therefore identifies the point as to which
+     * a rebalance will result in the same operation (buy/sell) for
+     * all the assets.
+     */
+    return (assetValue / targetWeight) - portfolioValue;
+}
+
+
+
+double getMinTargetBuyForFullPortfolioOnlyBuyRebalance(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double portfolioValue) noexcept
+{
+    return targetWeights
+        .reduce(
+            [&](double result, double weight, std::size_t i)
+            {
+                return std::max(
+                    result,
+                    Compute::getChangeInPortfolioValueForAssetValueToBecomeIdealValue(weight, assetValues[i], portfolioValue)
+                );
+            },
+            0.0
+        );
+}
+
+
+
+double getMinTargetSellForFullPortfolioOnlySellRebalance(const JSArray<double>& targetWeights, const JSArray<double>& assetValues, const double portfolioValue) noexcept
+{
+    return targetWeights
+        .reduce(
+            [&](double result, double weight, std::size_t i)
+            {
+                return std::min(
+                    result,
+                    Compute::getChangeInPortfolioValueForAssetValueToBecomeIdealValue(weight, assetValues[i], portfolioValue)
+                );
+            },
+            0.0
+        );
 }
 }
 
@@ -191,11 +271,11 @@ double getAssetValueChangeForEqRebalance(const double weight0, const double valu
 
 JSArray<double> Solution::getResult(void) const noexcept
 {
-    if (Compute::isCurrencyEqual(this->targetBuySell, 0.0))
-        return JSArray<double>(this->assetCount, 0.0);
-
     if (this->assetCount <= 1)
         return JSArray<double>(this->assetCount, this->targetBuySell);
+
+    if (Compute::isCurrencyEqual(this->targetBuySell, 0.0))
+        return JSArray<double>(this->assetCount, 0.0);
 
     const bool isSellWholePortfolio = -this->targetBuySell > this->totalPortfolioValue || Compute::isCurrencyEqual(-this->targetBuySell, this->totalPortfolioValue);
     if (isSellWholePortfolio)
@@ -227,36 +307,17 @@ JSArray<double> Solution::getResult(void) const noexcept
  */
 bool Solution::canDoFullSingleOpRebalance(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell */) const noexcept
 {
-    const double minChangeForFullSingleOpRebalance = ([&]()
-    {
-        // for some reason when I use the ternary operator, std::min and std::max don't know which function to overload; use static_cast to dictate this.
-        using extremum_t = const double& (*)(const double&, const double&);
-        const extremum_t getChangeNeededForFullRebalance = (this->isSell) ? static_cast<extremum_t>(std::min<double>) : static_cast<extremum_t>(std::max<double>);
-
-        // if asset is over weight this value will be positive and if underweight this will be negative
-        // balance means have target weight or  target value, which is = total portfolio value * target weight
-        const auto changeInPortfolioValueForCurrAssetToBeBalanced = [&](std::size_t i)
-            {return (this->assetValues[i] / this->targetWeights[i]) - this->totalPortfolioValue;};
-
-        double result = changeInPortfolioValueForCurrAssetToBeBalanced(0);
-        for (std::size_t i = 1; i < this->assetCount; i += 1)
-        {
-            result = getChangeNeededForFullRebalance(result, changeInPortfolioValueForCurrAssetToBeBalanced(i));
-        }
-
-        return result;
-    })();
-
     if (this->isSell)
     {
+        const double minSell = Compute::getMinTargetSellForFullPortfolioOnlySellRebalance(this->targetWeights, this->assetValues, this->totalPortfolioValue);
         const double targetSell = this->targetBuySell; // is a negative value
-        return -targetSell > -minChangeForFullSingleOpRebalance || Compute::isCurrencyEqual(targetSell, minChangeForFullSingleOpRebalance);
+        return -targetSell > -minSell || Compute::isCurrencyEqual(targetSell, minSell);
     }
 
+    const double minBuy = Compute::getMinTargetBuyForFullPortfolioOnlyBuyRebalance(this->targetWeights, this->assetValues, this->totalPortfolioValue);
     const double targetBuy = this->targetBuySell;
-    return targetBuy > minChangeForFullSingleOpRebalance || Compute::isCurrencyEqual(targetBuy, minChangeForFullSingleOpRebalance);
+    return targetBuy > minBuy || Compute::isCurrencyEqual(targetBuy, minBuy);
 }
-
 
 
 
@@ -415,17 +476,18 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
     })();
     const JSArray<double> targetNonZeroWeights = indexNumbersNonZeroWeight
         .map([&](std::size_t valIndex){return this->targetWeights[valIndex];});
-    const JSArray<double> assetValuesWithTargetNonZeroWeights = indexNumbersNonZeroWeight
+    const JSArray<double> nonZeroWeightAssets = indexNumbersNonZeroWeight
         .map([&](std::size_t valIndex){return this->assetValues[valIndex];});
-    const double sumOfNonZeroWeightAssets = assetValuesWithTargetNonZeroWeights
+    const double sumOfNonZeroWeightAssets = nonZeroWeightAssets
         .reduce([](double sum, double val){return sum + val;}, 0.0);
 
     if (!this->isSell)
     {
+        // is buy and just ignore buying anything with a 0% target weight
         return alignResultsToOriginalIndex(
             Solution(
                 targetNonZeroWeights,
-                assetValuesWithTargetNonZeroWeights,
+                nonZeroWeightAssets,
                 sumOfNonZeroWeightAssets,
                 0,
                 this->targetBuySell,
@@ -437,7 +499,6 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
     }
 
     const double targetSell = targetBuySell;
-    const std::size_t numberOfZeroWeights = this->assetCount - indexNumbersNonZeroWeight.size();
     const JSArray<std::size_t> indexNumbersZeroWeight = ([&]()
     {
         JSArray<std::size_t> result(this->numberOfZeroWeights);
@@ -462,25 +523,25 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
         const std::size_t newMaxIter = ([&]() -> std::size_t
         {
             const std::size_t originalMaxIter = this->maxIter;
-            const std::size_t originalChangePacket = totalPortfolioValue / originalMaxIter;
+            const std::size_t originalChangePacket = this->totalPortfolioValue / originalMaxIter;
             const std::size_t equivalentItersDoneBySellingAllZeroWeightAssets = sumOfZeroWeightAssetValues / originalChangePacket;
             return originalMaxIter - equivalentItersDoneBySellingAllZeroWeightAssets;
         })();
         const JSArray<double> changesToNonZeroAssetValues = Solution(
-                targetNonZeroWeights,
-                assetValuesWithTargetNonZeroWeights,
-                sumOfNonZeroWeightAssets,
-                0,
-                targetSell + sumOfZeroWeightAssetValues,
-                newMaxIter
-            ).getResult();
+            targetNonZeroWeights,
+            nonZeroWeightAssets,
+            sumOfNonZeroWeightAssets,
+            0,
+            targetSell + sumOfZeroWeightAssetValues,
+            newMaxIter
+        ).getResult();
 
         return ([&]() -> JSArray<double>
         {
             JSArray<double> result = alignResultsToOriginalIndex(
                 changesToNonZeroAssetValues,
                 indexNumbersNonZeroWeight,
-                targetWeights.size()
+                this->assetCount
             );
             for (const std::size_t zeroIndex : indexNumbersZeroWeight)
             {
@@ -498,9 +559,10 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
         return ([&]() -> JSArray<double>
         {
             JSArray<double> result = this->sellZeroWeightAsset(zeroWeightAssetValues, indexNumbersZeroWeight);
-            for (std::size_t i = 0; i < numberOfZeroWeights; i += 1)
+            for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
             {
                 const double afterSaleValue = result[i];
+                // change result to represent the change in value (aka how much to sell exactly, not the ending value after the sale)
                 result[i] = afterSaleValue - zeroWeightAssetValues[i];
             }
 
@@ -512,8 +574,17 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
         })();
     }
 
-    return indexNumbersZeroWeight
-        .map([&](double zeroIndex){return -this->assetValues[zeroIndex];});
+    // can exactly only sell the zero weight assets
+    return ([&]() -> JSArray<double>
+    {
+        JSArray<double> result(0);
+        for (const std::size_t zeroIndex : indexNumbersZeroWeight)
+        {
+            result[zeroIndex] = -assetValues[zeroIndex];
+        }
+
+        return result;
+    })();
 }
 
 
@@ -581,6 +652,6 @@ JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightA
     }
 
     return zeroWeightAssetsSortedValuesDescending
-        .sort([](const auto& a, const auto& b){return a.index < b.index;})
+        .sort([](const auto& a, const auto& b){return a.index < b.index;}) // return to original order
         .map([](const ValueIndexPair& valIndex){return valIndex.value;});
 }
