@@ -87,10 +87,6 @@ private:
     JSArray<double> singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter */) const noexcept;
     JSArray<double> zeroWeightHandler(/* ,targetWeights, assetValues, totalPortfolioValue, numberOfZeroWeights, targetBuySell, maxIter */) const noexcept;
     JSArray<double> sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept;
-
-
-    JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept;
-
 };
 
 
@@ -597,140 +593,30 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
 
 JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept
 {
-    // I need to be able to sort the values and still know what the element's
-    // original index was in order to put them back into their
-    // original order. I could also do this with by having an array
-    // of pointers to a copy of the zeroWeightAssetValues elements
-    // and sort that array by the value of the element, but not only
-    // does this introduce pointers, but more importantly might mess
-    // with cache locality as the resulting array ends up acting more
-    // like a linked list as the next access is no longer in the next
-    // address hop as we chase pointers around. Also I think this is
-    // more readable, and I'll take the hit of having to sort twice
-    // for this exact reason, and also this shouldn't be a common use case.
-    struct ValueIndexPair
-    {
-        double value;
-        std::size_t index;
-    };
-
-    const double targetSell = this->targetBuySell;
+    const double targetSell = this->targetBuySell; // negative value
     if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
 
-    JSArray<ValueIndexPair> zeroWeightAssetsSortedValuesDescending = zeroWeightAssetValues
-        .map([&](double value, std::size_t index) -> ValueIndexPair {return {value, index};})
-        .sort([](const auto& a, const auto& b){return a.value > b.value;});
-    std::size_t groupSizeWithSameLargestValue = ([&]() -> std::size_t
-    {
-        std::size_t groupSize = 1;
-        const double largestValue = zeroWeightAssetsSortedValuesDescending[0].value;
-        while (
-            groupSize < this->numberOfZeroWeights &&
-            Compute::isCurrencyEqual(
-                largestValue,
-                zeroWeightAssetsSortedValuesDescending[groupSize].value
-            )
-        )
-        {groupSize += 1;}
-
-        return groupSize;
-    })();
-    double remainingSell = targetSell; // remember, this value is negative!!!!
-    double currLargestValue = zeroWeightAssetsSortedValuesDescending[0].value;
-
-    while (groupSizeWithSameLargestValue < this->numberOfZeroWeights && !Compute::isCurrencyEqual(remainingSell, 0.0))
-    {
-        const std::size_t startIndexOfNextGroup = groupSizeWithSameLargestValue;
-        const double nextGroupUniformValue = zeroWeightAssetsSortedValuesDescending[startIndexOfNextGroup].value;
-        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupSizeWithSameLargestValue;
-        const double actualChange = (-remainingSell > -targetChange) ? targetChange : remainingSell;
-
-        remainingSell -= actualChange;
-        currLargestValue += actualChange / groupSizeWithSameLargestValue;
-        // maybe the size of the curr next group is greater than 1, this ensures we also get those values to.
-        while (
-            groupSizeWithSameLargestValue < this->numberOfZeroWeights &&
-            Compute::isCurrencyEqual(
-                zeroWeightAssetsSortedValuesDescending[groupSizeWithSameLargestValue].value,
-                currLargestValue
-            )
-        ){groupSizeWithSameLargestValue += 1;}
-    }
-    currLargestValue += remainingSell / groupSizeWithSameLargestValue;
-
-    for (std::size_t i = 0; i < groupSizeWithSameLargestValue; i += 1)
-    {
-        zeroWeightAssetsSortedValuesDescending[i].value = currLargestValue;
-    }
-
-    return zeroWeightAssetsSortedValuesDescending
-        .sort([](const auto& a, const auto& b){return a.index < b.index;}) // return to original order
-        .map([](const ValueIndexPair& valIndex){return valIndex.value;});
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept
-{
-    const double targetSell = this->targetBuySell;
-    if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
-
-    JSArray<double> resultZeroWeightAssetValues = zeroWeightAssetValues;
-    JSArray<double*> sortedDescendingAccessor = ([&]() -> JSArray<double*>
+    JSArray<double> afterSalesZeroWeightAssetValues = zeroWeightAssetValues;
+    // used to be able to access in sorted fashion but still keep original order of values in result
+    JSArray<double*> valuesSortedAccessorDescending = ([&]() -> JSArray<double*>
     {
         JSArray<double*> result(this->numberOfZeroWeights);
         for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
         {
-            result[i] = &resultZeroWeightAssetValues[i];
+            result[i] = &afterSalesZeroWeightAssetValues[i];
         }
 
-        return result.sort([](const int* a, const int* b){return *a > *b;});
+        return result.sort([](const double* a, const double* b){return *a > *b;});
     })();
-
+    double currLargestValue = *(valuesSortedAccessorDescending[0]);
     std::size_t groupSizeWithSameLargestValue = ([&]() -> std::size_t
     {
         std::size_t groupSize = 1;
-        const double largestValue = *(sortedDescendingAccessor[0]);
         while (
             groupSize < this->numberOfZeroWeights &&
             Compute::isCurrencyEqual(
-                largestValue,
-                *(sortedDescendingAccessor[groupSize])
+                currLargestValue,
+                *(valuesSortedAccessorDescending[groupSize])
             )
         )
         {groupSize += 1;}
@@ -738,22 +624,21 @@ JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWe
         return groupSize;
     })();
     double remainingSell = targetSell; // remember, this value is negative!!!!
-    double currLargestValue = *(sortedDescendingAccessor[0]);
 
     while (groupSizeWithSameLargestValue < this->numberOfZeroWeights && !Compute::isCurrencyEqual(remainingSell, 0.0))
     {
         const std::size_t startIndexOfNextGroup = groupSizeWithSameLargestValue;
-        const double nextGroupUniformValue = *(sortedDescendingAccessor[startIndexOfNextGroup]);
-        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupSizeWithSameLargestValue;
-        const double actualChange = (-remainingSell > -targetChange) ? targetChange : remainingSell;
+        const double nextGroupUniformValue = *(valuesSortedAccessorDescending[startIndexOfNextGroup]);
+        const double idealSell = -(currLargestValue - nextGroupUniformValue) * groupSizeWithSameLargestValue;
+        const double actualSell = (-remainingSell > -idealSell) ? idealSell : remainingSell;
 
-        remainingSell -= actualChange;
-        currLargestValue += actualChange / groupSizeWithSameLargestValue;
+        remainingSell -= actualSell;
+        currLargestValue += actualSell / groupSizeWithSameLargestValue;
         // maybe the size of the curr next group is greater than 1, this ensures we also get those values to.
         while (
             groupSizeWithSameLargestValue < this->numberOfZeroWeights &&
             Compute::isCurrencyEqual(
-                *(sortedDescendingAccessor[groupSizeWithSameLargestValue]),
+                *(valuesSortedAccessorDescending[groupSizeWithSameLargestValue]),
                 currLargestValue
             )
         ){groupSizeWithSameLargestValue += 1;}
@@ -762,8 +647,8 @@ JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWe
 
     for (std::size_t i = 0; i < groupSizeWithSameLargestValue; i += 1)
     {
-        *(sortedDescendingAccessor[i]) = currLargestValue;
+        *(valuesSortedAccessorDescending[i]) = currLargestValue;
     }
 
-    return resultZeroWeightAssetValues;
+    return afterSalesZeroWeightAssetValues;
 }
