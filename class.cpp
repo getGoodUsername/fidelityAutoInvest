@@ -35,7 +35,7 @@ public:
             targetWeights,
             assetValues,
             targetBuySell,
-            std::abs(targetBuySell)
+            std::abs(targetBuySell) + Compute::isCurrencyEqual(targetBuySell, 0.0)
         )
     {}
 
@@ -46,9 +46,11 @@ public:
             std::accumulate(assetValues.begin(), assetValues.end(), 0),
             std::count_if(targetWeights.begin(), targetWeights.end(), Compute::isWeightZero),
             targetBuySell,
-            maxIter + (maxIter == 0)
+            maxIter
         )
     {}
+
+    const double totalPortfolioValue;
 
     JSArray<double> getResult(void) const noexcept;
 
@@ -73,7 +75,6 @@ private:
 
     const JSArray<double>& targetWeights;
     const JSArray<double>& assetValues;
-    const double totalPortfolioValue;
     const std::size_t numberOfZeroWeights;
     const double targetBuySell;
     const std::size_t maxIter;
@@ -85,7 +86,11 @@ private:
     std::size_t getMostUnderWeightIndex(/* targetWeights, */ const JSArray<double>& currAssetValues, const double currPortfolioValue) const noexcept;
     JSArray<double> singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter */) const noexcept;
     JSArray<double> zeroWeightHandler(/* ,targetWeights, assetValues, totalPortfolioValue, numberOfZeroWeights, targetBuySell, maxIter */) const noexcept;
-    JSArray<double> sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues, const JSArray<std::size_t>& zeroWeightOriginalIndexNumbers) const noexcept;
+    JSArray<double> sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept;
+
+
+    JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept;
+
 };
 
 
@@ -122,11 +127,12 @@ int main(void)
         14447.1967749764,
         11317.59
     };
-    const double targetBuySell = 230000;
+    const double targetBuySell = -100000;
 
     auto calculator = Solution(targetWeights, assetValues, targetBuySell);
+    std::cout << Compute::getMinTargetBuyForFullPortfolioOnlyBuyRebalance(targetWeights, assetValues, calculator.totalPortfolioValue) << '\n';
+    std::cout << Compute::getMinTargetSellForFullPortfolioOnlySellRebalance(targetWeights, assetValues, calculator.totalPortfolioValue) << '\n';
     std::cout << calculator.getResult() << '\n';
-
 
     return 0;
 }
@@ -556,22 +562,20 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
     {
         const JSArray<double> zeroWeightAssetValues = indexNumbersZeroWeight
             .map([&](std::size_t zeroIndex){return this->assetValues[zeroIndex];});
-        return ([&]() -> JSArray<double>
-        {
-            JSArray<double> result = this->sellZeroWeightAsset(zeroWeightAssetValues, indexNumbersZeroWeight);
-            for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
-            {
-                const double afterSaleValue = result[i];
-                // change result to represent the change in value (aka how much to sell exactly, not the ending value after the sale)
-                result[i] = afterSaleValue - zeroWeightAssetValues[i];
-            }
+        JSArray<double> result = this->sellZeroWeightAsset(zeroWeightAssetValues);
 
-            return alignResultsToOriginalIndex(
-                result,
-                indexNumbersZeroWeight,
-                targetWeights.size()
-            );
-        })();
+        for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
+        {
+            const double afterSaleValue = result[i];
+            // change result to represent how much to sell exactly, not the ending value after the sale
+            result[i] = afterSaleValue - zeroWeightAssetValues[i];
+        }
+
+        return alignResultsToOriginalIndex(
+            result,
+            indexNumbersZeroWeight,
+            targetWeights.size()
+        );
     }
 
     // can exactly only sell the zero weight assets
@@ -591,11 +595,19 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
 
 
 
-JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues, const JSArray<std::size_t>& zeroWeightOriginalIndexNumbers) const noexcept
+JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept
 {
-    // I need to be able to sort and still know what the element's
+    // I need to be able to sort the values and still know what the element's
     // original index was in order to put them back into their
-    // original order.
+    // original order. I could also do this with by having an array
+    // of pointers to a copy of the zeroWeightAssetValues elements
+    // and sort that array by the value of the element, but not only
+    // does this introduce pointers, but more importantly might mess
+    // with cache locality as the resulting array ends up acting more
+    // like a linked list as the next access is no longer in the next
+    // address hop as we chase pointers around. Also I think this is
+    // more readable, and I'll take the hit of having to sort twice
+    // for this exact reason, and also this shouldn't be a common use case.
     struct ValueIndexPair
     {
         double value;
@@ -606,9 +618,9 @@ JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightA
     if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
 
     JSArray<ValueIndexPair> zeroWeightAssetsSortedValuesDescending = zeroWeightAssetValues
-        .map([](double value, std::size_t index) -> ValueIndexPair {return {value, index};})
+        .map([&](double value, std::size_t index) -> ValueIndexPair {return {value, index};})
         .sort([](const auto& a, const auto& b){return a.value > b.value;});
-    std::size_t groupWithSameLargestValueSize = ([&]() -> std::size_t
+    std::size_t groupSizeWithSameLargestValue = ([&]() -> std::size_t
     {
         std::size_t groupSize = 1;
         const double largestValue = zeroWeightAssetsSortedValuesDescending[0].value;
@@ -626,27 +638,27 @@ JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightA
     double remainingSell = targetSell; // remember, this value is negative!!!!
     double currLargestValue = zeroWeightAssetsSortedValuesDescending[0].value;
 
-    while (groupWithSameLargestValueSize < this->numberOfZeroWeights && !Compute::isCurrencyEqual(remainingSell, 0.0))
+    while (groupSizeWithSameLargestValue < this->numberOfZeroWeights && !Compute::isCurrencyEqual(remainingSell, 0.0))
     {
-        const double nextGroupUniformValue = zeroWeightAssetsSortedValuesDescending[groupWithSameLargestValueSize].value;
-        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupWithSameLargestValueSize;
-        const double actualChange = (-remainingSell > -targetChange || Compute::isCurrencyEqual(remainingSell, targetChange)) ?
-            targetChange : remainingSell;
+        const std::size_t startIndexOfNextGroup = groupSizeWithSameLargestValue;
+        const double nextGroupUniformValue = zeroWeightAssetsSortedValuesDescending[startIndexOfNextGroup].value;
+        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupSizeWithSameLargestValue;
+        const double actualChange = (-remainingSell > -targetChange) ? targetChange : remainingSell;
 
         remainingSell -= actualChange;
-        currLargestValue += actualChange / groupWithSameLargestValueSize;
-        // maybe the size of the next group is greater than 1, this ensures we also get those values to.
+        currLargestValue += actualChange / groupSizeWithSameLargestValue;
+        // maybe the size of the curr next group is greater than 1, this ensures we also get those values to.
         while (
-            groupWithSameLargestValueSize < this->numberOfZeroWeights &&
+            groupSizeWithSameLargestValue < this->numberOfZeroWeights &&
             Compute::isCurrencyEqual(
-                zeroWeightAssetsSortedValuesDescending[groupWithSameLargestValueSize].value,
+                zeroWeightAssetsSortedValuesDescending[groupSizeWithSameLargestValue].value,
                 currLargestValue
             )
-        ){groupWithSameLargestValueSize += 1;}
+        ){groupSizeWithSameLargestValue += 1;}
     }
-    currLargestValue += remainingSell / groupWithSameLargestValueSize;
+    currLargestValue += remainingSell / groupSizeWithSameLargestValue;
 
-    for (std::size_t i = 0; i < groupWithSameLargestValueSize; i += 1)
+    for (std::size_t i = 0; i < groupSizeWithSameLargestValue; i += 1)
     {
         zeroWeightAssetsSortedValuesDescending[i].value = currLargestValue;
     }
@@ -654,4 +666,104 @@ JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightA
     return zeroWeightAssetsSortedValuesDescending
         .sort([](const auto& a, const auto& b){return a.index < b.index;}) // return to original order
         .map([](const ValueIndexPair& valIndex){return valIndex.value;});
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+JSArray<double> Solution::test_sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept
+{
+    const double targetSell = this->targetBuySell;
+    if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
+
+    JSArray<double> resultZeroWeightAssetValues = zeroWeightAssetValues;
+    JSArray<double*> sortedDescendingAccessor = ([&]() -> JSArray<double*>
+    {
+        JSArray<double*> result(this->numberOfZeroWeights);
+        for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
+        {
+            result[i] = &resultZeroWeightAssetValues[i];
+        }
+
+        return result.sort([](const int* a, const int* b){return *a > *b;});
+    })();
+
+    std::size_t groupSizeWithSameLargestValue = ([&]() -> std::size_t
+    {
+        std::size_t groupSize = 1;
+        const double largestValue = *(sortedDescendingAccessor[0]);
+        while (
+            groupSize < this->numberOfZeroWeights &&
+            Compute::isCurrencyEqual(
+                largestValue,
+                *(sortedDescendingAccessor[groupSize])
+            )
+        )
+        {groupSize += 1;}
+
+        return groupSize;
+    })();
+    double remainingSell = targetSell; // remember, this value is negative!!!!
+    double currLargestValue = *(sortedDescendingAccessor[0]);
+
+    while (groupSizeWithSameLargestValue < this->numberOfZeroWeights && !Compute::isCurrencyEqual(remainingSell, 0.0))
+    {
+        const std::size_t startIndexOfNextGroup = groupSizeWithSameLargestValue;
+        const double nextGroupUniformValue = *(sortedDescendingAccessor[startIndexOfNextGroup]);
+        const double targetChange = -(currLargestValue - nextGroupUniformValue) * groupSizeWithSameLargestValue;
+        const double actualChange = (-remainingSell > -targetChange) ? targetChange : remainingSell;
+
+        remainingSell -= actualChange;
+        currLargestValue += actualChange / groupSizeWithSameLargestValue;
+        // maybe the size of the curr next group is greater than 1, this ensures we also get those values to.
+        while (
+            groupSizeWithSameLargestValue < this->numberOfZeroWeights &&
+            Compute::isCurrencyEqual(
+                *(sortedDescendingAccessor[groupSizeWithSameLargestValue]),
+                currLargestValue
+            )
+        ){groupSizeWithSameLargestValue += 1;}
+    }
+    currLargestValue += remainingSell / groupSizeWithSameLargestValue;
+
+    for (std::size_t i = 0; i < groupSizeWithSameLargestValue; i += 1)
+    {
+        *(sortedDescendingAccessor[i]) = currLargestValue;
+    }
+
+    return resultZeroWeightAssetValues;
 }
