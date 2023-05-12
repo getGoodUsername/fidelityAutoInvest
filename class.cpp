@@ -43,7 +43,7 @@ public:
         : Solution(
             targetWeights,
             assetValues,
-            std::accumulate(assetValues.begin(), assetValues.end(), 0),
+            std::accumulate(assetValues.begin(), assetValues.end(), 0.0),
             std::count_if(targetWeights.begin(), targetWeights.end(), Compute::isWeightZero),
             targetBuySell,
             maxIter
@@ -86,7 +86,7 @@ private:
     std::size_t getMostUnderWeightIndex(/* targetWeights, */ const JSArray<double>& currAssetValues, const double currPortfolioValue) const noexcept;
     JSArray<double> singleOperationTransaction(void /* targetWeights, assetValues, totalPortfolioValue, targetBuySell, maxIter */) const noexcept;
     JSArray<double> zeroWeightHandler(/* ,targetWeights, assetValues, totalPortfolioValue, numberOfZeroWeights, targetBuySell, maxIter */) const noexcept;
-    JSArray<double> sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept;
+    JSArray<double> sellZeroWeightAssets(const JSArray<std::size_t>& indexNumbersZeroWeight) const noexcept;
 };
 
 
@@ -107,23 +107,23 @@ int main(void)
 {
     const JSArray<double> targetWeights = {
         65.000 / 100,
-        5.000 / 100,
         6.000 / 100,
-        5.000 / 100,
-        5.000 / 100,
-        6.000 / 100,
-        8.000 / 100
+        0.000 / 100,
+        0.000 / 100,
+        0.000 / 100,
+        21.000 / 100,
+        9.000 / 100
     };
     const JSArray<double> assetValues = {
         23672.72,
         15918.04,
-        6708.47,
-        3659.90,
-        5608.27,
-        14447.1967749764,
+        2222,
+        12222,
+        24222,
+        144047.1967749764,
         11317.59
     };
-    const double targetBuySell = -100000;
+    const double targetBuySell = -32760;
 
     auto calculator = Solution(targetWeights, assetValues, targetBuySell);
     std::cout << Compute::getMinTargetBuyForFullPortfolioOnlyBuyRebalance(targetWeights, assetValues, calculator.totalPortfolioValue) << '\n';
@@ -525,7 +525,7 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
         const std::size_t newMaxIter = ([&]() -> std::size_t
         {
             const std::size_t originalMaxIter = this->maxIter;
-            const std::size_t originalChangePacket = this->totalPortfolioValue / originalMaxIter;
+            const std::size_t originalChangePacket = this->targetBuySell / originalMaxIter;
             const std::size_t equivalentItersDoneBySellingAllZeroWeightAssets = sumOfZeroWeightAssetValues / originalChangePacket;
             return originalMaxIter - equivalentItersDoneBySellingAllZeroWeightAssets;
         })();
@@ -537,34 +537,30 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
             targetSell + sumOfZeroWeightAssetValues,
             newMaxIter
         ).getResult();
+        JSArray<double> result = alignResultsToOriginalIndex(
+            changesToNonZeroAssetValues,
+            indexNumbersNonZeroWeight,
+            this->assetCount
+        );
 
-        return ([&]() -> JSArray<double>
+        for (const std::size_t zeroIndex : indexNumbersZeroWeight)
         {
-            JSArray<double> result = alignResultsToOriginalIndex(
-                changesToNonZeroAssetValues,
-                indexNumbersNonZeroWeight,
-                this->assetCount
-            );
-            for (const std::size_t zeroIndex : indexNumbersZeroWeight)
-            {
-                result[zeroIndex] = -assetValues[zeroIndex];
-            }
+            result[zeroIndex] = -assetValues[zeroIndex];
+        }
 
-            return result;
-        })();
+        return result;
     }
 
     if (canOnlySellSomeZeroWeightAssets)
     {
-        const JSArray<double> zeroWeightAssetValues = indexNumbersZeroWeight
-            .map([&](std::size_t zeroIndex){return this->assetValues[zeroIndex];});
-        JSArray<double> result = this->sellZeroWeightAsset(zeroWeightAssetValues);
 
+        JSArray<double> result = this->sellZeroWeightAssets(indexNumbersZeroWeight);
         for (std::size_t i = 0; i < this->numberOfZeroWeights; i += 1)
         {
             const double afterSaleValue = result[i];
+            const double zeroWeightAssetValue = this->assetValues[indexNumbersZeroWeight[i]];
             // change result to represent how much to sell exactly, not the ending value after the sale
-            result[i] = afterSaleValue - zeroWeightAssetValues[i];
+            result[i] = afterSaleValue - zeroWeightAssetValue;
         }
 
         return alignResultsToOriginalIndex(
@@ -577,7 +573,7 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
     // can exactly only sell the zero weight assets
     return ([&]() -> JSArray<double>
     {
-        JSArray<double> result(0);
+        JSArray<double> result(this->assetCount, 0);
         for (const std::size_t zeroIndex : indexNumbersZeroWeight)
         {
             result[zeroIndex] = -assetValues[zeroIndex];
@@ -591,12 +587,13 @@ JSArray<double> Solution::zeroWeightHandler(/* ,targetWeights, assetValues, tota
 
 
 
-JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightAssetValues) const noexcept
+JSArray<double> Solution::sellZeroWeightAssets(const JSArray<std::size_t>& indexNumbersZeroWeight) const noexcept
 {
     const double targetSell = this->targetBuySell; // negative value
-    if (this->numberOfZeroWeights == 1) return {zeroWeightAssetValues[0] + targetSell};
+    if (this->numberOfZeroWeights == 1) return {this->assetValues[indexNumbersZeroWeight[0]] + targetSell};
 
-    JSArray<double> afterSalesZeroWeightAssetValues = zeroWeightAssetValues;
+    JSArray<double> afterSalesZeroWeightAssetValues = indexNumbersZeroWeight
+        .map([&](std::size_t zeroIndex){return this->assetValues[zeroIndex];});
     // used to be able to access in sorted fashion but still keep original order of values in result
     JSArray<double*> valuesSortedAccessorDescending = ([&]() -> JSArray<double*>
     {
@@ -618,8 +615,7 @@ JSArray<double> Solution::sellZeroWeightAsset(const JSArray<double>& zeroWeightA
                 currLargestValue,
                 *(valuesSortedAccessorDescending[groupSize])
             )
-        )
-        {groupSize += 1;}
+        ){groupSize += 1;}
 
         return groupSize;
     })();
