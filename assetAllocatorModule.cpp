@@ -1,10 +1,9 @@
 #include "HelperRepos/jsArray.h"
-#include <limits>
 #include <cmath>
 #include <numeric>
-
-
+#include <limits>
 #include <iostream>
+
 
 namespace Compute
 {
@@ -103,7 +102,7 @@ std::ostream& operator<<(std::ostream& os, const JSArray<T>& vec) {
     return os;
 }
 
-int main(void)
+int main(const int argc, char* argv)
 {
     const JSArray<double> targetWeights = {
         65.000 / 100,
@@ -230,6 +229,11 @@ double getChangeInPortfolioValueForAssetValueToBecomeIdealValue(const double tar
      * a rebalance will result in the same operation (buy/sell) for
      * all the assets.
      */
+
+    constexpr double positiveInfinity = std::numeric_limits<double>::infinity();
+    if (Compute::isWeightZero(targetWeight))
+        return (Compute::isCurrencyEqual(assetValue, 0.0)) ? 0.0 : positiveInfinity;
+
     return (assetValue / targetWeight) - portfolioValue;
 }
 

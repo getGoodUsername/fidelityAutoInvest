@@ -11,7 +11,7 @@ what is dynamic:
 
 What I think stuff means:
 "ORDER_TYPE=E":                             equities can also be =M meaning mutual funds
-"CURRENT_PAGE=TradeStocks":                 I think this a redundant version of the above query paramater
+"CURRENT_PAGE=TradeStocks":                 I think this a redundant version of the above query parameter
 "DEST_TRADE=Y":                             no idea... it automatically appears so I am keeping it
 ACCOUNT=[accountID]:                        the number associated with a specific account in fidelity, say a ROTH, or after tax account
 SYMBOL=VTI:                                 ticker of the equity I want to buy or sell.
