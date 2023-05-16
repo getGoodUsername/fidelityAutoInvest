@@ -2,6 +2,8 @@
 #include <cmath>
 #include <numeric>
 #include <limits>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
 
 
@@ -88,49 +90,100 @@ private:
     JSArray<double> sellZeroWeightAssets(const JSArray<std::size_t>& indexNumbersZeroWeight) const noexcept;
 };
 
+struct CommandLineArgs
+{
+    double targetBuySell;
+    JSArray<double> targetWeights;
+    JSArray<double> assetValues;
+};
+CommandLineArgs getCommandLineArgs(const int argc, const char* const argv[]) noexcept;
+void outputResult(const CommandLineArgs& args) noexcept;
 
-// for testing only, will be deleted in the future
-template<typename T>
-std::ostream& operator<<(std::ostream& os, const JSArray<T>& vec) {
-    os << "[ ";
-    for (std::size_t i = 0; i < vec.size() - 1; i += 1)
+
+
+int main(const int argc, const char* const argv[])
+{
+    if (argc != 4)
     {
-        os << vec[i] << ", ";
+        std::cerr << "Usage: " << argv[0] << " <target buy sell (+/-)>  <target weights (decimal value, 5% = 0.05)>  <current asset values>\n";
+        std::cerr << "Example: " << argv[0] << " 3450  \"0.65, 0.06, 0, 0, 0, 0.205, 0.085\"  \"23672.72, 15918.04, 2222, 12222, 24222, 144047.19, 11317.59\"\n";
+        std::cerr << "Note that target weights and asset values are treated as single arguments with comma separated values!\n";
+        return 1;
     }
 
-    os << vec[vec.size() - 1] << "]";
-    return os;
-}
+    const auto args = getCommandLineArgs(argc, argv);
+    if(args.targetWeights.size() != args.assetValues.size())
+    {
+        std::cerr << "ERROR: number of target weights does not match number of asset values\n";
+        std::cerr << "target weight count: " << args.targetWeights.size() << '\n';
+        std::cerr << "asset value count:   " << args.assetValues.size() << '\n';
+        return 1;
+    }
 
-int main(const int argc, char* argv)
-{
-    const JSArray<double> targetWeights = {
-        65.000 / 100,
-        6.000 / 100,
-        0.000 / 100,
-        0.000 / 100,
-        0.000 / 100,
-        21.000 / 100,
-        9.000 / 100
-    };
-    const JSArray<double> assetValues = {
-        23672.72,
-        15918.04,
-        2222,
-        12222,
-        24222,
-        144047.1967749764,
-        11317.59
-    };
-    const double targetBuySell = -32760;
-
-    auto calculator = Solution(targetWeights, assetValues, targetBuySell);
-    std::cout << Compute::getMinTargetBuyForFullPortfolioOnlyBuyRebalance(targetWeights, assetValues, calculator.totalPortfolioValue) << '\n';
-    std::cout << Compute::getMinTargetSellForFullPortfolioOnlySellRebalance(targetWeights, assetValues, calculator.totalPortfolioValue) << '\n';
-    std::cout << calculator.getResult() << '\n';
-
+    outputResult(args);
     return 0;
 }
+
+
+
+CommandLineArgs getCommandLineArgs(const int argc, const char* const argv[]) noexcept
+{
+    const auto fillValuesFromCommaSeparatedStr = [](const char* const str, JSArray<double>& container) -> void
+    {
+        std::string strCopy = str;
+        int startOfNum = 0;
+        int endOfNum = 0;
+        for (; endOfNum < strCopy.size(); endOfNum += 1)
+        {
+            auto&& currChar = strCopy[endOfNum];
+            if (currChar == ',')
+            {
+                currChar = '\0'; // to force atof to stop (it stops when it finds a null terminating char)
+                container.push_back(std::atof(strCopy.c_str() + startOfNum));
+                startOfNum = endOfNum + 1; // skip the comma
+            }
+        }
+
+        // the last number is not followed by a comma, and therefore won't be
+        // detected in the for loop. Only do this if there any values to speak of.
+        // last value will always terminate with a null terminating char so nothing
+        // needs to be done.
+        if (strCopy.size() > 0) container.push_back(std::atof(strCopy.c_str() + startOfNum));
+    };
+    CommandLineArgs result;
+
+    result.targetBuySell = std::atof(argv[1]);
+    fillValuesFromCommaSeparatedStr(argv[2], result.targetWeights);
+    result.assetValues.reserve(result.targetWeights.size());
+    fillValuesFromCommaSeparatedStr(argv[3], result.assetValues);
+
+    return result;
+}
+
+
+
+
+void outputResult(const CommandLineArgs& args) noexcept
+{
+    bool isSell = args.targetBuySell < 0;
+    const auto transactionSolver = Solution(args.targetWeights, args.assetValues, args.targetBuySell);
+    const auto getChangeForFullRebalanceFunc = (isSell) ? Compute::getMinTargetSellForFullPortfolioOnlySellRebalance : Compute::getMinTargetBuyForFullPortfolioOnlyBuyRebalance;
+    const double changeValueFullRebalance = getChangeForFullRebalanceFunc(args.targetWeights, args.assetValues, transactionSolver.totalPortfolioValue);
+    const double changeLeftAfterTransactions = (isSell) ? std::min(changeValueFullRebalance - args.targetBuySell, 0.0) : std::max(changeValueFullRebalance - args.targetBuySell, 0.0);
+    const char* const buySellStr = (isSell) ? "sell" : "buy";
+
+    std::cout << std::fixed << std::setprecision(2); // print doubles like currency ($)
+    std::cout << buySellStr << " left for only " << buySellStr << " full rebalance: " << changeValueFullRebalance << '\n';
+    std::cout << "target " << buySellStr << " only transactions: ";
+
+    const auto targetTransactions = transactionSolver.getResult();
+    for (std::size_t i = 0; i + 1 < targetTransactions.size(); i += 1)
+    {
+        std::cout << targetTransactions[i] << ", ";
+    }
+    std::cout << targetTransactions[targetTransactions.size() - 1] << '\n';
+}
+
 
 
 
