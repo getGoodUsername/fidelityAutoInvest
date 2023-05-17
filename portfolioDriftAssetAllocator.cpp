@@ -120,6 +120,14 @@ int main(const int argc, const char* const argv[])
         return 1;
     }
 
+    // targetWeights and assetValues for sure have the same size
+    // or else previous if block would do early return
+    if (args.targetWeights.size() == 0)
+    {
+        std::cerr << "ERROR: No target weights and no asset values provided!!!\n";
+        return 1;
+    }
+
     outputResult(args);
     return 0;
 }
