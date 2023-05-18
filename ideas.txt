@@ -2,3 +2,15 @@ track the asset values and their target weights and send a notification
 if at the end of a closing day your target weights have shifted so much
 that to be able to do a full buy rebalance would go above some threshold
 defined by the user.
+
+maybe use selenium grid to allow for parallel orders https://www.selenium.dev/documentation/grid/
+if doing parallel buy/sell orders can't be done easily on a single instance
+of selenium
+
+Have a different process for sells where the user is more in control
+and providing more instruction.
+Sells by their nature tend to come with more repercussion if not
+careful
+
+When buying always do limit orders that are slightly lower price than
+the current ask price. maybe 0.3% less aka 99.7% of current ask price
